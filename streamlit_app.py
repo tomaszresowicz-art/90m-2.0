@@ -11,7 +11,6 @@ st.caption("Aplikacja pobiera dane z aktualnego adresu 90minut.pl i układa je c
 
 @st.cache_data(ttl=300)  # Cache na 5 minut
 def pobierz_mecze_90minut():
-    # Dokładnie ten adres, o którym wspomniałeś!
     url = "http://www.90minut.pl/mecze_okreg.php"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -43,7 +42,7 @@ def pobierz_mecze_90minut():
 
     # Iteracja po wierszach tabeli
     for row in main_table.find_all("tr"):
-        # 1. Szukamy nagłówka daty (w mecze_okreg często zawiera tekst ze związkiem i dniem)
+        # 1. Szukamy nagłówka daty
         date_tag = row.find("th") or row.find("td", {"class": "vader"})
         if date_tag and "href" not in str(date_tag):
             text = date_tag.get_text(strip=True)
@@ -51,7 +50,7 @@ def pobierz_mecze_90minut():
                 current_date = text
                 continue
 
-        # 2. Szukamy nagłówka ligi (pogrubiony tekst <b>, zazwyczaj bez linków)
+        # 2. Szukamy nagłówka ligi
         league_tag = row.find("b")
         if league_tag and not row.find("a") and not league_tag.get_text(strip=True).isdigit():
             text_league = league_tag.get_text(strip=True)
@@ -67,8 +66,6 @@ def pobierz_mecze_90minut():
             # Sprawdzamy czy pierwsza kolumna to faktycznie godzina (np. "17:00")
             if ":" in time_text and len(time_text) <= 5:
                 teams_text = cols[1].get_text(strip=True)
-                
-                # Jeśli jest trzecia kolumna, to może być tam wynik
                 score_text = cols[2].get_text(strip=True) if len(cols) > 2 else ""
                 
                 matches_data.append({
@@ -89,7 +86,7 @@ def pobierz_mecze_90minut():
         
     return df
 
-# Wyświetlanie UI
+# Wyświetlanie UI (Cały ten blok ma teraz idealne wcięcia)
 try:
     with st.spinner('Pobieram aktualne mecze z mecze_okreg.php...'):
         df_mecze = pobierz_mecze_90minut()
@@ -99,4 +96,25 @@ try:
     else:
         search_query = st.text_input("🔍 Filtruj wyniki (klub, liga, region):", "")
         if search_query:
-            df_mecze = df_mecze
+            # Poprawione i bezpieczniejsze filtrowanie dataframe w Streamlit
+            df_mecze = df_mecze[df_mecze.astype(str).apply(lambda x: x.str.contains(search_query, case=False)).any(axis=1)]
+
+        st.dataframe(
+            df_mecze,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Dzień / Okręg": st.column_config.TextColumn("Region / Data", width="medium"),
+                "Rozgrywki / Liga": st.column_config.TextColumn("Rozgrywki", width="medium"),
+                "Godzina": st.column_config.TextColumn("Godzina", width="small"),
+                "Mecz": st.column_config.TextColumn("Spotkanie", width="large"),
+                "Wynik": st.column_config.TextColumn("Wynik", width="small"),
+            }
+        )
+
+except Exception as e:
+    st.error(f"Błąd działania aplikacji: {e}")
+
+if st.button("🔄 Odśwież tabelę"):
+    st.cache_data.clear()
+    st.st.rerun()
