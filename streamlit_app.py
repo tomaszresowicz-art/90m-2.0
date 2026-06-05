@@ -28,20 +28,11 @@ OKREGI = {
     16: "Łódzki ZPN"
 }
 
-# Lista prawdziwych User-Agentów do rotacji, by zmylić system anty-botowy
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0"
-]
-
 # 2. Ustawienia Streamlit
 st.set_page_config(page_title="Terminarz 90minut", layout="wide", page_icon="⚽")
 
 st.title("⚽ Interaktywny Terminarz 90minut.pl")
-st.caption("Skonfiguruj filtry w panelu bocznym i kliknij przycisk '🔍 Znajdź mecze'.")
+st.caption("Aplikacja korzysta z tunelowania zapytań, aby ominąć blokady hostingu Streamlit.")
 
 # Panel boczny (Sidebar)
 with st.sidebar:
@@ -71,9 +62,6 @@ wybrane_id = [k for k, v in OKREGI.items() if v in wybrane_nazwy]
 @st.cache_data(ttl=600)
 def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
     all_matches = []
-    
-    # Używamy zwykłego requests zamiast trwałej Session, aby czyścić stan ciasteczek między strzałami
-    base_url = "http://www.90minut.pl/mecze_okreg.php"
     dzis = datetime.now()
     total_steps = len(identyfikatory_okregow) * (liczba_dni + 1)
     
@@ -83,7 +71,7 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
     progress_bar = st.progress(0)
     status_text = st.empty()
     step = 0
-    ostatnia_surowa_odpowiedz = "Brak pobranych danych (serwer zablokował zapytania)."
+    ostatnia_surowa_odpowiedz = "Brak pobranych danych."
 
     regex_godzina = re.compile(r'^\d{1,2}:\d{2}$')
 
@@ -97,46 +85,35 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
             step += 1
             procent = int((step / total_steps) * 100)
             progress_bar.progress(procent)
-            status_text.text(f"Pobieranie terminarza: {nazwa_okregu} ➡️ {data_str}")
+            status_text.text(f"Pobieranie przez proxy: {nazwa_okregu} ➡️ {data_str}")
 
-            payload = {
-                "id_okreg": str(id_okreg),
-                "data": data_str
-            }
+            # Oryginalny, prawidłowy URL docelowy
+            target_url = f"http://www.90minut.pl/mecze_okreg.php?id_okreg={id_okreg}&data={data_str}"
+            
+            # OBEJŚCIE BLOKADY: Używamy otwieranego publicznie proxy allorigins do zamaskowania IP chmury AWS
+            proxy_url = f"https://api.allorigins.win/get?url={requests.utils.quote(target_url)}"
 
             dni_tygodnia_pl = ["poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota", "niedziela"]
             dzien_tygodnia = dni_tygodnia_pl[celowana_data.weekday()]
-            
             miesiace_pl = ["", "stycznia", "lutego", "marca", "kwietnia", "maja", "czerwca", "lipca", "sierpnia", "września", "października", "listopada", "grudnia"]
             formatowana_data_pl = f"{celowana_data.day} {miesiace_pl[celowana_data.month]} {celowana_data.year} ({dzien_tygodnia})"
 
-            # Dynamiczny kamuflaż nagłówków (osobny dla każdego zapytania w pętli)
-            headers = {
-                "User-Agent": random.choice(USER_AGENTS),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive"
-            }
-
             try:
-                # Strzał bez współdzielonej sesji cookie, za to ze świeżym User-Agentem
-                response = requests.get(base_url, params=payload, headers=headers, timeout=10)
+                # Zapytanie idzie do bramki proxy, a bramka pobiera kod z 90minut i oddaje nam JSON-a
+                response = requests.get(proxy_url, timeout=15)
                 
                 if response.status_code == 200:
-                    response.encoding = 'iso-8859-2'
-                    html_text = response.text
+                    data_json = response.json()
+                    html_text = data_json.get("contents", "")
                     
                     soup = BeautifulSoup(html_text, "html.parser")
                     main_headers = [b.get_text(strip=True) for b in soup.find_all("b")[:6]]
                     
-                    # SYSTEM KONTROLI BLOKAD: Jeżeli serwer wcisnął nam stronę główną, logujemy to, ale walczymy dalej
+                    # Weryfikacja, czy proxy nie dostało pustego szablonu strony głównej
                     if 'Skarb Ekstraklasy' in main_headers or 'Transfery - Ekstr.' in main_headers:
-                        ostatnia_surowa_odpowiedz = f"Zablokowany URL (Zwrócił główną): {response.url}\nUżyty User-Agent: {headers['User-Agent']}"
                         continue
                     
-                    # Jeśli minęliśmy zaporę, zapisujemy sukces w logu diagnostycznym
-                    ostatnia_surowa_odpowiedz = f"Sukces! Prawdziwy URL: {response.url}\nNagłówki strony: {main_headers}\n\n--- KOD ---\n{html_text[:800]}"
+                    ostatnia_surowa_odpowiedz = f"Sukces! Tunelowanie URL: {target_url}\nNagłówki <b> strony: {main_headers}"
                     
                     wiersze = soup.find_all("tr")
                     current_league = "Rozgrywki"
@@ -168,11 +145,11 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
                                         "Wynik": score_text
                                     })
                 
-                # Inteligentna, ludzka przerwa (Jitter) od 0.3 do 0.7 sekundy przed następnym dniem
-                time.sleep(random.uniform(0.3, 0.7))
+                # Niewielki odstęp czasowy
+                time.sleep(0.2)
                 
             except Exception as e:
-                ostatnia_surowa_odpowiedz = f"Wyjątek dla URL: {base_url} (params: {payload}) -> {str(e)}"
+                ostatnia_surowa_odpowiedz = f"Błąd bramki proxy dla URL {target_url}: {str(e)}"
 
     progress_bar.empty()
     status_text.empty()
@@ -194,7 +171,7 @@ else:
         st.session_state.debug_html = "Brak danych."
 
     if uruchom_szukanie:
-        with st.spinner("Pobieranie terminarza z użyciem rotacji przeglądarek (ominięcie anty-bota)..."):
+        with st.spinner("Pobieranie terminarza przez niezależne proxy sieciowe..."):
             df, debug = pobierz_mecze_precyzyjnie(wybrane_id, LICZBA_DNI_W_PRZOD)
             st.session_state.pobrane_dane = df
             st.session_state.debug_html = debug
@@ -203,8 +180,8 @@ else:
         df_mecze = st.session_state.pobrane_dane
 
         if df_mecze.empty:
-            st.error("❌ Blokada sesji: Serwer 90minut zidentyfikował serwer hostingu i odrzucił żądanie terminarza, podrzucając stronę główną.")
-            with st.expander("🛠️ Szczegóły blokady (Ślad przeglądarki)", expanded=True):
+            st.error("❌ Serwer proxy nie zdołał ominąć zabezpieczeń lub brak meczów w wybranym przedziale.")
+            with st.expander("🛠️ Szczegóły ostatniego żądania", expanded=True):
                 st.code(st.session_state.debug_html)
         else:
             search_query = st.text_input("🔍 Szybki filtr tabeli (wpisz klub lub ligę):", "")
