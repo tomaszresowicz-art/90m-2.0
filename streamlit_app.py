@@ -3,8 +3,6 @@ from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime, timedelta
 import re
-import json
-import urllib.parse
 
 # 1. Słownik mapujący ID okręgów na czytelne nazwy
 OKREGI = {
@@ -27,37 +25,37 @@ OKREGI = {
     16: "Łódzki ZPN"
 }
 
-st.set_page_config(page_title="Półautomatyczny Terminarz 90minut", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Niezawodny Asystent 90minut", layout="wide", page_icon="⚽")
 
-st.title("⚽ Niezawodny Terminarz 90minut.pl")
-st.caption("Metoda hybrydowa: bezpieczne pobieranie przeglądarkowe + wczytanie pliku.")
+st.title("⚽ Sprawdzony Terminarz 90minut.pl")
+st.caption("Wersja 100% odporna na blokady – pobierasz stronę bezpośrednio, Python ją przetwarza.")
 
 # Panel boczny (Sidebar)
 with st.sidebar:
-    st.header("⚙️ Krok 1: Ustawienia pobierania")
+    st.header("⚙️ Ustawienia filtrów")
     wybrane_nazwy = st.multiselect(
         "Wybierz okręgi/związki:",
         options=list(OKREGI.values()),
         default=["Małopolski ZPN"]
     )
-    LICZBA_DNI_W_PRZOD = st.slider("Zakres wyszukiwania (w dniach):", min_value=1, max_value=7, value=3)
+    LICZBA_DNI_W_PRZOD = st.slider("Zakres dni w przód:", min_value=1, max_value=7, value=3)
     
     st.write("---")
-    st.header("⚙️ Krok 3: Czyszczenie")
     if st.button("🔄 Resetuj aplikację", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
 wybrane_id = [k for k, v in OKREGI.items() if v in wybrane_nazwy]
 
-# Funkcja parsująca surowy kod HTML
-def parsuj_html_90minut(html_text, nazwa_okregu, formatowana_data_pl, celowana_data):
+# Funkcja parsująca tekst/HTML wklejony ze schowka
+def parsuj_wklejony_html(html_text, nazwa_okregu, formatowana_data_pl, celowana_data):
     matches = []
     regex_godzina = re.compile(r'^\d{1,2}:\d{2}$')
     
     soup = BeautifulSoup(html_text, "html.parser")
     main_headers = [b.get_text(strip=True) for b in soup.find_all("b")[:6]]
     
+    # Przeciwdziałanie pustym stronon głównym
     if 'Skarb Ekstraklasy' in main_headers or 'Transfery - Ekstr.' in main_headers:
         return matches
 
@@ -82,7 +80,7 @@ def parsuj_html_90minut(html_text, nazwa_okregu, formatowana_data_pl, celowana_d
                 
                 if teams_text and "wypisz_zapowiedzi" not in teams_text and "poprzednie" not in teams_text:
                     matches.append({
-                        "Data_Sort": celowana_data.date().isoformat(),
+                        "Data_Sort": celowana_data.date(),
                         "Dzień": formatowana_data_pl,
                         "Okręg / Związek": nazwa_okregu,
                         "Rozgrywki / Liga": current_league,
@@ -92,7 +90,7 @@ def parsuj_html_90minut(html_text, nazwa_okregu, formatowana_data_pl, celowana_d
                     })
     return matches
 
-# Przygotowanie listy URL
+# Przygotowanie linków
 list_of_urls = []
 dzis = datetime.now()
 
@@ -111,118 +109,73 @@ for id_okreg in wybrane_id:
             "url": target_url,
             "okreg": OKREGI[id_okreg],
             "data_pl": f_data_pl,
-            "key": f"{id_okreg}_{d_str}",
             "raw_date": d_str
         })
 
-# --- INTERFEJS KROK PO KROKU ---
-col1, col2 = st.columns(2)
+# UI aplikacji
+col1, col2 = st.columns([1, 2])
 
 with col1:
-    st.subheader("📥 Krok 1: Pobierz dane z 90minut")
-    st.write("Kliknij poniższy przycisk. Otworzy się małe okienko, które pobierze mecze przez Twoje IP i zapisze plik `mecze_dane.json` w Twoim folderze Pobrane.")
+    st.subheader("🔗 1. Otwórz terminarz")
+    st.write("Kliknij poniższe linki (otworzą się w nowych kartach) dla interesujących Cię dni:")
     
-    js_urls = json.dumps(list_of_urls)
-    html_downloader = f"""
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="utf-8"></head>
-    <body>
-        <button id="btn" style="width:100%; height:45px; background-color:#ff4b4b; color:white; border:none; border-radius:8px; font-weight:bold; font-size:15px; cursor:pointer;">
-            🚀 Uruchom pobieranie pliku z meczami
-        </button>
-        <div id="status" style="margin-top:10px; font-family:sans-serif; font-size:13px; color:#555;"></div>
-
-        <script>
-        document.getElementById('btn').addEventListener('click', async () => {{
-            const urls = {js_urls};
-            const results = {{}};
-            const statusDiv = document.getElementById('status');
-            
-            document.getElementById('btn').disabled = true;
-            document.getElementById('btn').style.backgroundColor = '#ccc';
-            
-            for(let i=0; i<urls.length; i++) {{
-                const item = urls[i];
-                statusDiv.innerHTML = `⏳ Pobieranie: ${{item.okreg}} (${{item.data_pl}})...`;
-                
-                try {{
-                    const response = await fetch('https://corsproxy.io/?' + encodeURIComponent(item.url));
-                    if(response.ok) {{
-                        results[item.key] = await response.text();
-                    }}
-                }} catch(e) {{
-                    console.error(e);
-                }}
-                await new Promise(r => setTimeout(r, 150));
-            }}
-            
-            statusDiv.innerHTML = "✅ Gotowe! Generowanie pliku...";
-            
-            // Tworzenie i automatyczne pobieranie pliku JSON na komputer użytkownika
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(results));
-            const downloadAnchor = document.createElement('a');
-            downloadAnchor.setAttribute("href", dataStr);
-            downloadAnchor.setAttribute("download", "mecze_dane.json");
-            document.body.appendChild(downloadAnchor);
-            downloadAnchor.click();
-            downloadAnchor.remove();
-            
-            statusDiv.innerHTML = "🎉 Plik 'mecze_dane.json' został pobrany! Przejdź do Kroku 2.";
-            document.getElementById('btn').disabled = false;
-            document.getElementById('btn').style.backgroundColor = '#ff4b4b';
-        }});
-        </script>
-    </body>
-    </html>
-    """
-    st.iframe(src="data:text/html;charset=utf-8," + urllib.parse.quote(html_downloader), height=110)
+    # Grupowanie linków po okręgach dla czytelności
+    for nazwa_okr in wybrane_nazwy:
+        st.markdown(f"**📍 {nazwa_okr}:**")
+        linki_okregu = [u for u in list_of_urls if u["okreg"] == nazwa_okr]
+        for item in linki_okregu:
+            st.markdown(f"- [{item['data_pl']}]({item['url']})")
 
 with col2:
-    st.subheader("📤 Krok 2: Wgraj pobrany plik")
-    st.write("Przeciągnij pobrany plik `mecze_dane.json` tutaj, aby Python wygenerował terminarz:")
-    wgrany_plik = st.file_uploader("Wybierz plik JSON", type=["json"], label_visibility="collapsed")
+    st.subheader("📋 2. Wklej zawartość strony")
+    st.write("Na otwartej stronie kliknij **CTRL + A** (zaznacz wszystko), skopiuj (**CTRL + C**) i wklej poniżej:")
+    
+    wklejony_tekst = st.text_area(
+        "Tutaj wklej zawartość (możesz wklejać kod źródłowy strony lub zwykły zaznaczony tekst)",
+        height=200,
+        placeholder="Kliknij tutaj i naciśnij CTRL + V..."
+    )
 
-# --- ETAP PRZETWARZANIA W PYTHONIE ---
-if wgrany_plik is not None:
-    try:
-        pobrane_strony = json.load(wgrany_plik)
-        all_parsed_matches = []
+# --- PRZETWARZANIE DANYCH ---
+if wklejony_tekst:
+    all_parsed_matches = []
+    
+    # Sprawdzamy wklejony tekst pod kątem wszystkich wygenerowanych konfiguracji dni/okręgów
+    for item in list_of_urls:
+        celowana_data_obj = datetime.strptime(item["raw_date"], "%Y-%m-%d")
         
-        for item in list_of_urls:
-            html_content = pobrane_strony.get(item["key"])
-            if html_content:
-                celowana_data_obj = datetime.strptime(item["raw_date"], "%Y-%m-%d")
-                mecze_z_dnia = parsuj_html_90minut(html_content, item["okreg"], item["data_pl"], celowana_data_obj)
-                all_parsed_matches.extend(mecze_z_dnia)
-                
-        if len(all_parsed_matches) == 0:
-            st.warning("⚠️ W załadowanym pliku nie odnaleziono żadnych zaplanowanych meczów dla wybranych kryteriów.")
-        else:
-            df_mecze = pd.DataFrame(all_parsed_matches)
-            st.success(f"🎉 Sukces! Pomyślnie załadowano i sparsowano {len(df_mecze)} meczów!")
+        # Parsujemy wklejony blok danych
+        mecze_z_dnia = parsuj_wklejony_html(wklejony_tekst, item["okreg"], item["data_pl"], celowana_data_obj)
+        if mecze_z_dnia:
+            all_parsed_matches.extend(mecze_z_dnia)
             
-            search_query = st.text_input("🔍 Szybki filtr tabeli (wpisz klub lub ligę):", "")
-            df_filtrowane = df_mecze.copy()
-            
-            if search_query:
-                df_filtrowane = df_filtrowane[df_filtrowane.astype(str).apply(lambda x: x.str.contains(search_query, case=False)).any(axis=1)]
+    if len(all_parsed_matches) == 0:
+        st.error("⚠️ Parser nie znalazł tabeli meczów w tym co wkleiłeś. Upewnij się, że kopiujesz całą stronę z meczami wybranego okręgu.")
+    else:
+        # Usuwanie ewentualnych duplikatów spotkań
+        df_mecze = pd.DataFrame(all_parsed_matches).drop_duplicates(subset=["Godzina", "Mecz"])
+        df_mecze = df_mecze.sort_values(by=["Data_Sort", "Godzina"])
+        
+        st.success(f"🎉 Sukces! Pomyślnie sparsowano i przygotowano {len(df_mecze)} meczów!")
+        
+        # Filtrowanie wyników na żywo
+        search_query = st.text_input("🔍 Szybki filtr tabeli zbiorczej (wpisz klub lub ligę):", "")
+        df_filtrowane = df_mecze.copy()
+        
+        if search_query:
+            df_filtrowane = df_filtrowane[df_filtrowane.astype(str).apply(lambda x: x.str.contains(search_query, case=False)).any(axis=1)]
 
-            st.write("---")
+        st.write("---")
+        
+        # Wyświetlanie wyników w rozbijaniu na okręgi
+        for id_okreg in wybrane_id:
+            nazwa_okregu = OKREGI[id_okreg]
+            df_okregu = df_filtrowane[df_filtrowane["Okręg / Związek"] == nazwa_okregu]
+            liczba_meczów = len(df_okregu)
             
-            for id_okreg in wybrane_id:
-                nazwa_okregu = OKREGI[id_okreg]
-                df_okregu = df_filtrowane[df_filtrowane["Okręg / Związek"] == nazwa_okregu]
-                liczba_meczów = len(df_okregu)
-                
-                with st.expander(f"📍 {nazwa_okregu} ({liczba_meczów} meczów)", expanded=True if liczba_meczów > 0 else False):
-                    if df_okregu.empty:
-                        st.info("Brak spotkań spełniających kryteria.")
-                    else:
-                        df_wyswietl = df_okregu.drop(columns=["Okręg / Związek", "Data_Sort"], errors='ignore')
-                        st.dataframe(df_wyswietl, use_container_width=True, hide_index=True)
-                        
-    except Exception as e:
-        st.error(f"Błąd struktury pliku: {str(e)}")
-else:
-    st.info("💡 Instrukcja: Wybierz ligi, kliknij czerwony przycisk w Kroku 1, a otrzymany plik upuść w Kroku 2.")
+            with st.expander(f"📍 {nazwa_okregu} ({liczba_meczów} meczów)", expanded=True if liczba_meczów > 0 else False):
+                if df_okregu.empty:
+                    st.info("Brak pasujących spotkań dla tego okręgu w załadowanej paczce.")
+                else:
+                    df_wyswietl = df_okregu.drop(columns=["Okręg / Związek", "Data_Sort"], errors='ignore')
+                    st.dataframe(df_wyswietl, use_container_width=True, hide_index=True)
