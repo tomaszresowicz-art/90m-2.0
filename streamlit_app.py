@@ -30,52 +30,56 @@ OKREGI = {
 st.set_page_config(page_title="Terminarz 90minut", layout="wide", page_icon="⚽")
 
 st.title("⚽ Interaktywny Terminarz 90minut.pl")
-st.caption("Skonfiguruj filtry poniżej i kliknij przycisk '🔍 Znajdź mecze', aby pobrać aktualne zapowiedzi.")
+st.caption("Skonfiguruj filtry w panelu bocznym i kliknij przycisk '🔍 Znajdź mecze'.")
 
-# Formularz blokujący automatyczne odświeżanie przy każdym kliknięciu
+# Panel boczny (Sidebar)
 with st.sidebar:
     st.header("⚙️ Ustawienia wyszukiwania")
     
-    # Wielokrotny wybór okręgów w UI
     wybrane_nazwy = st.multiselect(
         "Wybierz okręgi/związki:",
         options=list(OKREGI.values()),
         default=["Szczebel Centralny / Krajowy", "Małopolski ZPN"]
     )
 
-    # Suwak do wyboru zakresu dni (domyślnie 14 dni)
     LICZBA_DNI_W_PRZOD = st.slider("Zakres wyszukiwania (w dniach):", min_value=1, max_value=14, value=14)
     
     st.write("---")
-    # GŁÓWNY PRZYCISK URUCHAMIAJĄCY
     uruchom_szukanie = st.button("🔍 Znajdź mecze", type="primary", use_container_width=True)
     
-    # Przycisk awaryjny czyszczący cache
     if st.button("🔄 Wyczyść pamięć (Cache)", use_container_width=True):
         st.cache_data.clear()
+        if "pobrane_dane" in st.session_state:
+            del st.session_state.pobrane_dane
         st.rerun()
 
-# Pobieramy ID dla wybranych nazw okręgów
 wybrane_id = [k for k, v in OKREGI.items() if v in wybrane_nazwy]
 
-@st.cache_data(ttl=600)  # Pamięć podręczna na 10 minut
+@st.cache_data(ttl=600)
 def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
     all_matches = []
+    # Używamy sesji, żeby zachować pliki cookie serwera (zmniejsza ryzyko blokad)
+    session = requests.Session()
+    
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "pl,en-US;q=0.7,en;q=0.3",
+        "Connection": "keep-alive"
     }
+    
     base_url = "http://www.90minut.pl/mecze_okreg.php"
     dzis = datetime.now()
 
     total_steps = len(identyfikatory_okregow) * (liczba_dni + 1)
     if total_steps == 0:
-        return pd.DataFrame()
+        return pd.DataFrame(), "Nie wybrano żadnego okręgu."
 
     progress_bar = st.progress(0)
     status_text = st.empty()
     step = 0
+    ostatnia_surowa_odpowiedz = "Brak pobranych danych tekstowych HTML."
 
-    # Pobieranie danych
     for id_okreg in identyfikatory_okregow:
         nazwa_okregu = OKREGI[id_okreg]
 
@@ -98,53 +102,54 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
             formatowana_data_pl = f"{celowana_data.day} {miesiace_pl[celowana_data.month]} {celowana_data.year} ({dzien_tygodnia})"
 
             try:
-                response = requests.get(base_url, params=parametry, headers=headers, timeout=10)
+                response = session.get(base_url, params=parametry, headers=headers, timeout=10)
                 if response.status_code == 200:
                     response.encoding = 'iso-8859-2'
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    main_table = soup.find("table", {"class": "main"})
+                    html_text = response.text
+                    ostatnia_surowa_odpowiedz = html_text # Zapisujemy na wypadek debugowania
                     
-                    if main_table:
-                        current_league = "Inne rozgrywki"
-
-                        for row in main_table.find_all("tr"):
-                            # Detekcja nazwy rozgrywek / ligi
-                            date_tag = row.find("th") or row.find("td", {"class": "vader"})
-                            if date_tag and "href" not in str(date_tag):
-                                text = date_tag.get_text(strip=True)
-                                if text and not text.isdigit() and "Wybierz" not in text and ":" not in text:
-                                    current_league = text
-                                continue
-
-                            league_tag = row.find("b")
-                            if league_tag and not row.find("a") and not league_tag.get_text(strip=True).isdigit():
-                                text_league = league_tag.get_text(strip=True)
-                                if ":" not in text_league and "Wybierz" not in text_league:
-                                    current_league = text_league
-                                continue
-
-                            # Wyciąganie meczu
+                    soup = BeautifulSoup(html_text, "html.parser")
+                    
+                    # Poprawka: szukamy jakiejkolwiek tabeli, która zawiera mecze, nie tylko klasy 'main'
+                    tables = soup.find_all("table")
+                    
+                    for table in tables:
+                        current_league = "Rozgrywki"
+                        wiersze = table.find_all("tr")
+                        
+                        for row in wiersze:
+                            # 1. Wykrywanie nagłówka ligi (często w komórce z klasą vader lub th)
+                            league_cell = row.find(["th", "td"], {"class": "vader"}) or row.find("b")
+                            if league_cell and not row.find("a"):
+                                text_l = league_cell.get_text(strip=True)
+                                if text_l and not text_l.isdigit() and ":" not in text_l and "Wybierz" not in text_l:
+                                    current_league = text_l
+                                    continue
+                            
+                            # 2. Wyciąganie meczu (musi mieć min. 2 kolumny, gdzie kolumna 1 to czas)
                             cols = row.find_all("td")
                             if len(cols) >= 2:
                                 time_text = cols[0].get_text(strip=True)
                                 
-                                # Walidacja formatu godziny (HH:MM)
-                                if ":" in time_text and len(time_text) <= 5:
+                                # Sprawdzamy czy to format godziny (np. "12:30")
+                                if ":" in time_text and len(time_text) <= 5 and time_text[0].isdigit():
                                     teams_text = cols[1].get_text(strip=True)
                                     score_text = cols[2].get_text(strip=True) if len(cols) > 2 else ""
                                     
-                                    all_matches.append({
-                                        "Data_Sort": celowana_data.date(),
-                                        "Dzień": formatowana_data_pl,
-                                        "Okręg / Związek": nazwa_okregu,
-                                        "Rozgrywki / Liga": current_league,
-                                        "Godzina": time_text,
-                                        "Mecz": teams_text,
-                                        "Wynik": score_text
-                                    })
+                                    # Pomijamy wiersze czysto informacyjne
+                                    if teams_text and "wypisz_zapowiedzi" not in teams_text:
+                                        all_matches.append({
+                                            "Data_Sort": celowana_data.date(),
+                                            "Dzień": formatowana_data_pl,
+                                            "Okręg / Związek": nazwa_okregu,
+                                            "Rozgrywki / Liga": current_league,
+                                            "Godzina": time_text,
+                                            "Mecz": teams_text,
+                                            "Wynik": score_text
+                                        })
                 time.sleep(0.05)
-            except Exception:
-                pass
+            except Exception as e:
+                ostatnia_surowa_odpowiedz = f"Błąd połączenia HTTP: {str(e)}"
 
     progress_bar.empty()
     status_text.empty()
@@ -155,61 +160,68 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
         df['Sort_Time'] = pd.to_datetime(df['Godzina'], format='%H:%M', errors='coerce').dt.time
         df = df.sort_values(by=["Data_Sort", "Sort_Time", "Rozgrywki / Liga"])
         
-    return df
+    return df, ostatnia_surowa_odpowiedz
 
-# 3. Logika wyświetlania wyników
+# 3. Logika prezentacji danych
 if not wybrane_id:
     st.info("👈 Wybierz przynajmniej jeden okręg na panelu bocznym i kliknij 'Znajdź mecze'.")
 else:
-    # Program rusza tylko, jeśli użytkownik wcisnął przycisk LUB dane są już w sesji
-    if uruchom_szukanie or "pobrane_dane" in st.session_state:
-        
-        try:
-            # Zapisujemy wynik do stanu sesji, żeby wyszukiwarka tekstowa nie resetowała pobranych danych
-            if uruchom_szukanie or "pobrane_dane" not in st.session_state:
-                with st.spinner("Łączenie z bazą danych 90minut.pl..."):
-                    st.session_state.pobrane_dane = pobierz_mecze_precyzyjnie(wybrane_id, LICZBA_DNI_W_PRZOD)
+    # Inicjalizacja pustego stanu sesji, jeśli nie istnieje
+    if "pobrane_dane" not in st.session_state:
+        st.session_state.pobrane_dane = None
+        st.session_state.debug_html = ""
 
-            df_mecze = st.session_state.pobrane_dane
+    # Jeżeli użytkownik kliknął szukanie, pobieramy świeże dane
+    if uruchom_szukanie:
+        with st.spinner("Łączenie i pobieranie danych ze struktur 90minut.pl..."):
+            df, debug = pobierz_mecze_precyzyjnie(wybrane_id, LICZBA_DNI_W_PRZOD)
+            st.session_state.pobrane_dane = df
+            st.session_state.debug_html = debug
 
-            if df_mecze.empty:
-                st.warning("Brak zaplanowanych meczów w wybranym okresie dla tych okręgów. Spróbuj wyczyścić cache boczny.")
-            else:
-                # Globalna wyszukiwarka tekstowa
-                search_query = st.text_input("🔍 Filtruj wyniki wewnątrz list (wpisz klub lub ligę):", "")
+    # Wyświetlanie, o ile dane zostały już pobrane w tej sesji
+    if st.session_state.pobrane_dane is not None:
+        df_mecze = st.session_state.pobrane_dane
+
+        if df_mecze.empty:
+            st.error("❌ Parser nie odnalazł żadnych meczów. Serwer mógł zmienić strukturę strony lub zablokować zapytanie.")
+            
+            # Sekcja diagnostyczna automatycznie dostępna przy błędzie
+            with st.expander("🛠️ Zobacz kod odpowiedzi serwera (Debugowanie)", expanded=True):
+                st.code(st.session_state.debug_html[:2000], language="html")
+        else:
+            # Wyszukiwarka tekstowa
+            search_query = st.text_input("🔍 Filtruj wyniki wewnątrz list (wpisz klub lub ligę):", "")
+            df_filtrowane = df_mecze.copy()
+            
+            if search_query:
+                df_filtrowane = df_filtrowane[df_filtrowane.astype(str).apply(lambda x: x.str.contains(search_query, case=False)).any(axis=1)]
+
+            st.write("---")
+            
+            # Generowanie rozwijanych list (Expanders)
+            for id_okreg in wybrane_id:
+                nazwa_okregu = OKREGI[id_okreg]
+                df_okregu = df_filtrowane[df_filtrowane["Okręg / Związek"] == nazwa_okregu]
                 
-                df_filtrowane = df_mecze.copy()
-                if search_query:
-                    df_filtrowane = df_filtrowane[df_filtrowane.astype(str).apply(lambda x: x.str.contains(search_query, case=False)).any(axis=1)]
-
-                st.write("---")
+                liczba_meczów = len(df_okregu)
+                naglowek_sekcji = f"📍 {nazwa_okregu} (Zaplanowanych meczów: {liczba_meczów})"
                 
-                # Budowanie rozwijanych pasków (Expanders)
-                for id_okreg in wybrane_id:
-                    nazwa_okregu = OKREGI[id_okreg]
-                    df_okregu = df_filtrowane[df_filtrowane["Okręg / Związek"] == nazwa_okregu]
-                    
-                    liczba_meczów = len(df_okregu)
-                    naglowek_sekcji = f"📍 {nazwa_okregu} (Zaplanowanych meczów: {liczba_meczów})"
-                    
-                    with st.expander(naglowek_sekcji, expanded=False):
-                        if df_okregu.empty:
-                            st.info("Brak meczów dla tego okręgu spełniających kryteria wyszukiwania.")
-                        else:
-                            df_wyswietl = df_okregu.drop(columns=["Okręg / Związek", "Data_Sort", "Sort_Time"], errors='ignore')
-                            st.dataframe(
-                                df_wyswietl,
-                                use_container_width=True,
-                                hide_index=True,
-                                column_config={
-                                    "Dzień": st.column_config.TextColumn("📅 Data i dzień", width="medium"),
-                                    "Rozgrywki / Liga": st.column_config.TextColumn("🏆 Rozgrywki", width="medium"),
-                                    "Godzina": st.column_config.TextColumn("⏰ Godzina", width="small"),
-                                    "Mecz": st.column_config.TextColumn("⚔️ Spotkanie", width="large"),
-                                    "Wynik": st.column_config.TextColumn("📊 Wynik", width="small"),
-                                }
-                            )
-        except Exception as e:
-            st.error(f"Błąd aplikacji: {e}")
+                with st.expander(naglowek_sekcji, expanded=False):
+                    if df_okregu.empty:
+                        st.info("Brak meczów dla tego okręgu spełniających kryteria wyszukiwania.")
+                    else:
+                        df_wyswietl = df_okregu.drop(columns=["Okręg / Związek", "Data_Sort", "Sort_Time"], errors='ignore')
+                        st.dataframe(
+                            df_wyswietl,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Dzień": st.column_config.TextColumn("📅 Data i dzień", width="medium"),
+                                "Rozgrywki / Liga": st.column_config.TextColumn("🏆 Rozgrywki", width="medium"),
+                                "Godzina": st.column_config.TextColumn("⏰ Godzina", width="small"),
+                                "Mecz": st.column_config.TextColumn("⚔️ Spotkanie", width="large"),
+                                "Wynik": st.column_config.TextColumn("📊 Wynik", width="small"),
+                            }
+                        )
     else:
-        st.info("👈 Kliknij czerwony/niebieski przycisk '🔍 Znajdź mecze' na panelu bocznym, aby rozpocząć skanowanie serwera.")
+        st.info("👈 Skonfiguruj okręgi po lewej stronie i kliknij czerwony/niebieski przycisk '🔍 Znajdź mecze', aby uruchomić skrypt.")
