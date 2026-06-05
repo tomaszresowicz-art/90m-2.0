@@ -62,11 +62,14 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
     all_matches = []
     session = requests.Session()
     
+    # Rozbudowane nagłówki udające prawdziwą przeglądarkę Firefox na Windowsie
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "pl,en-US;q=0.7,en;q=0.3",
-        "Connection": "keep-alive"
+        "Referer": "http://www.90minut.pl/",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
     }
     
     base_url = "http://www.90minut.pl/mecze_okreg.php"
@@ -79,7 +82,7 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
     progress_bar = st.progress(0)
     status_text = st.empty()
     step = 0
-    ostatnia_surowa_odpowiedz = "Brak pobranych danych tekstowych HTML."
+    ostatnia_surowa_odpowiedz = "Rozpoczęto pętlę, ale nie odebrano kodu HTML."
 
     for id_okreg in identyfikatory_okregow:
         nazwa_okregu = OKREGI[id_okreg]
@@ -103,11 +106,16 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
             formatowana_data_pl = f"{celowana_data.day} {miesiace_pl[celowana_data.month]} {celowana_data.year} ({dzien_tygodnia})"
 
             try:
-                response = session.get(base_url, params=parametry, headers=headers, timeout=10)
+                # Dodano allow_redirects=True oraz jawne przekazywanie headers za każdym razem
+                response = session.get(base_url, params=parametry, headers=headers, timeout=12, allow_redirects=True)
+                
+                # Zapisujemy status HTTP, żeby wiedzieć czy to np. błąd 403 (blokada)
+                ostatnia_surowa_odpowiedz = f"Status HTTP: {response.status_code}\n\n"
+                
                 if response.status_code == 200:
                     response.encoding = 'iso-8859-2'
                     html_text = response.text
-                    ostatnia_surowa_odpowiedz = html_text
+                    ostatnia_surowa_odpowiedz += html_text
                     
                     soup = BeautifulSoup(html_text, "html.parser")
                     tables = soup.find_all("table")
@@ -142,9 +150,14 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
                                             "Mecz": teams_text,
                                             "Wynik": score_text
                                         })
-                time.sleep(0.05)
+                else:
+                    ostatnia_surowa_odpowiedz += f"Treść błędu serwera:\n{response.text[:1000]}"
+                
+                # Bezpieczna mikro-pauza
+                time.sleep(0.1)
+                
             except Exception as e:
-                ostatnia_surowa_odpowiedz = f"Błąd połączenia HTTP: {str(e)}"
+                ostatnia_surowa_odpowiedz = f"Wyjątek Pythona podczas żądania: {str(e)}"
 
     progress_bar.empty()
     status_text.empty()
@@ -161,30 +174,26 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
 if not wybrane_id:
     st.info("👈 Wybierz przynajmniej jeden okręg na panelu bocznym i kliknij 'Znajdź mecze'.")
 else:
-    # Inicjalizacja bezpiecznych stanów sesji
     if "pobrane_dane" not in st.session_state:
         st.session_state.pobrane_dane = None
     if "debug_html" not in st.session_state:
-        st.session_state.debug_html = "Brak pobranych danych tekstowych w tej sesji."
+        st.session_state.debug_html = "Brak pobranych danych – kliknij przycisk wyszukiwania."
 
-    # Jeśli kliknięto szukanie, czyścimy cache funkcji, by wymusić nowe zapytanie do serwera
     if uruchom_szukanie:
-        st.cache_data.clear()  # FIX: Wymuszenie czyszczenia pamięci podręcznej przed nowym pobraniem
-        with st.spinner("Łączenie i pobieranie danych ze struktur 90minut.pl..."):
+        with st.spinner("Łączenie z serwerami 90minut.pl i pobieranie danych..."):
             df, debug = pobierz_mecze_precyzyjnie(wybrane_id, LICZBA_DNI_W_PRZOD)
             st.session_state.pobrane_dane = df
             st.session_state.debug_html = debug
 
-    # Prezentacja danych
     if st.session_state.pobrane_dane is not None:
         df_mecze = st.session_state.pobrane_dane
 
         if df_mecze.empty:
-            st.error("❌ Parser nie odnalazł żadnych meczów. Serwer mógł zmienić strukturę strony lub zablokować zapytanie.")
+            st.error("❌ Komunikat: Nie znaleziono żadnych meczów lub serwer zablokował zapytanie.")
             
-            # Bezpieczne wyświetlanie logu debugowania
-            with st.expander("🛠️ Zobacz kod odpowiedzi serwera (Debugowanie)", expanded=True):
-                st.code(st.session_state.debug_html[:2000], language="html")
+            # WYŚWIETLANIE DIAGNOSTKI – Teraz na pewno pokaże status błędu (np. 403 lub kod błędu połączenia)
+            with st.expander("🛠️ Raport Diagnostyczny Serwera (Zweryfikuj błąd)", expanded=True):
+                st.code(st.session_state.debug_html[:3000])
         else:
             search_query = st.text_input("🔍 Filtruj wyniki wewnątrz list (wpisz klub lub ligę):", "")
             df_filtrowane = df_mecze.copy()
