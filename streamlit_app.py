@@ -161,3 +161,77 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
                                         "Godzina": time_text,
                                         "Mecz": teams_text,
                                         "Wynik": score_text
+                                    })
+                
+                time.sleep(0.05)
+                
+            except Exception as e:
+                ostatnia_surowa_odpowiedz = f"Błąd w pętli dla URL: {base_url} params {payload}: {str(e)}"
+
+    progress_bar.empty()
+    status_text.empty()
+
+    df = pd.DataFrame(all_matches)
+    if not df.empty:
+        df['Sort_Time'] = pd.to_datetime(df['Godzina'], format='%H:%M', errors='coerce').dt.time
+        df = df.sort_values(by=["Data_Sort", "Sort_Time", "Rozgrywki / Liga"])
+        
+    return df, ostatnia_surowa_odpowiedz
+
+# 3. Wyświetlanie wyników w UI
+if not wybrane_id:
+    st.info("👈 Wybierz okręgi w panelu bocznym i kliknij 'Znajdź mecze'.")
+else:
+    if "pobrane_dane" not in st.session_state:
+        st.session_state.pobrane_dane = None
+    if "debug_html" not in st.session_state:
+        st.session_state.debug_html = "Brak danych."
+
+    if uruchom_szukanie:
+        with st.spinner("Pobieranie i filtrowanie terminarzy okręgowych..."):
+            df, debug = pobierz_mecze_precyzyjnie(wybrane_id, LICZBA_DNI_W_PRZOD)
+            st.session_state.pobrane_dane = df
+            st.session_state.debug_html = debug
+
+    if st.session_state.pobrane_dane is not None:
+        df_mecze = st.session_state.pobrane_dane
+
+        if df_mecze.empty:
+            st.error("❌ Parser przeskanował podany zakres dni, ale we wszystkich z nich serwer zwrócił stronę główną (brak zaplanowanych kolejek).")
+            with st.expander("🛠️ Szczegóły ostatniej analizy", expanded=True):
+                st.code(st.session_state.debug_html)
+        else:
+            search_query = st.text_input("🔍 Szybki filtr tabeli (wpisz klub lub ligę):", "")
+            df_filtrowane = df_mecze.copy()
+            
+            if search_query:
+                df_filtrowane = df_filtrowane[df_filtrowane.astype(str).apply(lambda x: x.str.contains(search_query, case=False)).any(axis=1)]
+
+            st.write("---")
+            
+            for id_okreg in wybrane_id:
+                nazwa_okregu = OKREGI[id_okreg]
+                df_okregu = df_filtrowane[df_filtrowane["Okręg / Związek"] == nazwa_okregu]
+                
+                liczba_meczów = len(df_okregu)
+                naglowek_sekcji = f"📍 {nazwa_okregu} (Zaplanowanych meczów: {liczba_meczów})"
+                
+                with st.expander(naglowek_sekcji, expanded=True if liczba_meczów > 0 else False):
+                    if df_okregu.empty:
+                        st.info("Brak meczów spełniających kryteria dla tego regionu.")
+                    else:
+                        df_wyswietl = df_okregu.drop(columns=["Okręg / Związek", "Data_Sort", "Sort_Time"], errors='ignore')
+                        st.dataframe(
+                            df_wyswietl,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Dzień": st.column_config.TextColumn("📅 Data i dzień", width="medium"),
+                                "Rozgrywki / Liga": st.column_config.TextColumn("🏆 Rozgrywki", width="medium"),
+                                "Godzina": st.column_config.TextColumn("⏰ Godzina", width="small"),
+                                "Mecz": st.column_config.TextColumn("⚔️ Spotkanie", width="large"),
+                                "Wynik": st.column_config.TextColumn("📊 Wynik", width="small"),
+                            }
+                        )
+    else:
+        st.info("👈 Skonfiguruj filtry po lewej stronie i kliknij '🔍 Znajdź mecze'.")
