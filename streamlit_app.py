@@ -51,6 +51,8 @@ with st.sidebar:
         st.cache_data.clear()
         if "pobrane_dane" in st.session_state:
             del st.session_state.pobrane_dane
+        if "debug_html" in st.session_state:
+            del st.session_state.debug_html
         st.rerun()
 
 wybrane_id = [k for k, v in OKREGI.items() if v in wybrane_nazwy]
@@ -58,7 +60,6 @@ wybrane_id = [k for k, v in OKREGI.items() if v in wybrane_nazwy]
 @st.cache_data(ttl=600)
 def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
     all_matches = []
-    # Używamy sesji, żeby zachować pliki cookie serwera (zmniejsza ryzyko blokad)
     session = requests.Session()
     
     headers = {
@@ -106,11 +107,9 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
                 if response.status_code == 200:
                     response.encoding = 'iso-8859-2'
                     html_text = response.text
-                    ostatnia_surowa_odpowiedz = html_text # Zapisujemy na wypadek debugowania
+                    ostatnia_surowa_odpowiedz = html_text
                     
                     soup = BeautifulSoup(html_text, "html.parser")
-                    
-                    # Poprawka: szukamy jakiejkolwiek tabeli, która zawiera mecze, nie tylko klasy 'main'
                     tables = soup.find_all("table")
                     
                     for table in tables:
@@ -118,7 +117,6 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
                         wiersze = table.find_all("tr")
                         
                         for row in wiersze:
-                            # 1. Wykrywanie nagłówka ligi (często w komórce z klasą vader lub th)
                             league_cell = row.find(["th", "td"], {"class": "vader"}) or row.find("b")
                             if league_cell and not row.find("a"):
                                 text_l = league_cell.get_text(strip=True)
@@ -126,17 +124,14 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
                                     current_league = text_l
                                     continue
                             
-                            # 2. Wyciąganie meczu (musi mieć min. 2 kolumny, gdzie kolumna 1 to czas)
                             cols = row.find_all("td")
                             if len(cols) >= 2:
                                 time_text = cols[0].get_text(strip=True)
                                 
-                                # Sprawdzamy czy to format godziny (np. "12:30")
                                 if ":" in time_text and len(time_text) <= 5 and time_text[0].isdigit():
                                     teams_text = cols[1].get_text(strip=True)
                                     score_text = cols[2].get_text(strip=True) if len(cols) > 2 else ""
                                     
-                                    # Pomijamy wiersze czysto informacyjne
                                     if teams_text and "wypisz_zapowiedzi" not in teams_text:
                                         all_matches.append({
                                             "Data_Sort": celowana_data.date(),
@@ -166,30 +161,31 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
 if not wybrane_id:
     st.info("👈 Wybierz przynajmniej jeden okręg na panelu bocznym i kliknij 'Znajdź mecze'.")
 else:
-    # Inicjalizacja pustego stanu sesji, jeśli nie istnieje
+    # Inicjalizacja bezpiecznych stanów sesji
     if "pobrane_dane" not in st.session_state:
         st.session_state.pobrane_dane = None
-        st.session_state.debug_html = ""
+    if "debug_html" not in st.session_state:
+        st.session_state.debug_html = "Brak pobranych danych tekstowych w tej sesji."
 
-    # Jeżeli użytkownik kliknął szukanie, pobieramy świeże dane
+    # Jeśli kliknięto szukanie, czyścimy cache funkcji, by wymusić nowe zapytanie do serwera
     if uruchom_szukanie:
+        st.cache_data.clear()  # FIX: Wymuszenie czyszczenia pamięci podręcznej przed nowym pobraniem
         with st.spinner("Łączenie i pobieranie danych ze struktur 90minut.pl..."):
             df, debug = pobierz_mecze_precyzyjnie(wybrane_id, LICZBA_DNI_W_PRZOD)
             st.session_state.pobrane_dane = df
             st.session_state.debug_html = debug
 
-    # Wyświetlanie, o ile dane zostały już pobrane w tej sesji
+    # Prezentacja danych
     if st.session_state.pobrane_dane is not None:
         df_mecze = st.session_state.pobrane_dane
 
         if df_mecze.empty:
             st.error("❌ Parser nie odnalazł żadnych meczów. Serwer mógł zmienić strukturę strony lub zablokować zapytanie.")
             
-            # Sekcja diagnostyczna automatycznie dostępna przy błędzie
+            # Bezpieczne wyświetlanie logu debugowania
             with st.expander("🛠️ Zobacz kod odpowiedzi serwera (Debugowanie)", expanded=True):
                 st.code(st.session_state.debug_html[:2000], language="html")
         else:
-            # Wyszukiwarka tekstowa
             search_query = st.text_input("🔍 Filtruj wyniki wewnątrz list (wpisz klub lub ligę):", "")
             df_filtrowane = df_mecze.copy()
             
@@ -198,7 +194,6 @@ else:
 
             st.write("---")
             
-            # Generowanie rozwijanych list (Expanders)
             for id_okreg in wybrane_id:
                 nazwa_okregu = OKREGI[id_okreg]
                 df_okregu = df_filtrowane[df_filtrowane["Okręg / Związek"] == nazwa_okregu]
@@ -224,4 +219,4 @@ else:
                             }
                         )
     else:
-        st.info("👈 Skonfiguruj okręgi po lewej stronie i kliknij czerwony/niebieski przycisk '🔍 Znajdź mecze', aby uruchomić skrypt.")
+        st.info("👈 Skonfiguruj okręgi po lewej stronie i kliknij przycisk '🔍 Znajdź mecze', aby uruchomić skrypt.")
