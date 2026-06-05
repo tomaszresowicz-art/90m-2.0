@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime, timedelta
 import time
+import re
 
 # 1. Słownik mapujący ID okręgów na czytelne nazwy
 OKREGI = {
@@ -29,7 +30,7 @@ OKREGI = {
 # 2. Ustawienia Streamlit
 st.set_page_config(page_title="Terminarz 90minut", layout="wide", page_icon="⚽")
 
-st.title("⚽ Interaktywny Terminarz 90minut.pl")
+st.title("⚽ Elastyczny Terminarz 90minut.pl")
 st.caption("Skonfiguruj filtry w panelu bocznym i kliknij przycisk '🔍 Znajdź mecze'.")
 
 # Panel boczny (Sidebar)
@@ -62,20 +63,18 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
     all_matches = []
     session = requests.Session()
     
-    # 1. Maskowanie: Nagłówki identyczne z prawdziwą przeglądarką Chrome
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Cache-Control": "max-age=0",
+        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
         "Connection": "keep-alive"
     }
     
-    # 2. KLUCZOWE: Wstrzykiwanie ciasteczek akceptacji RODO i sesji, by serwer wyrenderował tabele
     cookies = {
         "90minut_cmp_consent": "true",
-        "90minut_rodo_accepted": "1",
-        "@@scroll_top": "0"
+        "90minut_rodo_accepted": "1"
     }
     session.cookies.update(cookies)
     
@@ -88,7 +87,10 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
     progress_bar = st.progress(0)
     status_text = st.empty()
     step = 0
-    ostatnia_surowa_odpowiedz = "Rozpoczęto pętlę pobierania."
+    ostatnia_surowa_odpowiedz = "Brak przetworzonych odpowiedzi."
+
+    # Wyrażenie regularne do łapania godzin w formacie HH:MM (np. 11:00, 18:45)
+    regex_godzina = re.compile(r'^\d{1,2}:\d{2}$')
 
     for id_okreg in identyfikatory_okregow:
         nazwa_okregu = OKREGI[id_okreg]
@@ -100,9 +102,8 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
             step += 1
             procent = int((step / total_steps) * 100)
             progress_bar.progress(procent)
-            status_text.text(f"Pobieranie danych: {nazwa_okregu} ➡️ {data_str}")
+            status_text.text(f"Skanowanie: {nazwa_okregu} ➡️ {data_str}")
 
-            # Budujemy pełny URL ręcznie, żeby wykluczyć błędy kodowania parametrów
             full_url = f"http://www.90minut.pl/mecze_okreg.php?id_okreg={id_okreg}&data={data_str}"
 
             dzien_tygodnia = ["poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota", "niedziela"][celowana_data.weekday()]
@@ -111,39 +112,43 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
 
             try:
                 response = session.get(full_url, headers=headers, timeout=12)
-                ostatnia_surowa_odpowiedz = f"Status HTTP: {response.status_code}\nURL: {full_url}\n\n"
                 
                 if response.status_code == 200:
                     response.encoding = 'iso-8859-2'
                     html_text = response.text
-                    ostatnia_surowa_odpowiedz += html_text
                     
                     soup = BeautifulSoup(html_text, "html.parser")
                     
-                    # Szukamy wierszy tabeli (tr)
+                    # Diagnostyka: wyciągamy tytuł okna oraz główne nagłówki tekstu na stronie
+                    page_title = soup.title.string if soup.title else "Brak <title>"
+                    main_headers = [b.get_text(strip=True) for b in soup.find_all("b")[:4]]
+                    ostatnia_surowa_odpowiedz = f"URL: {full_url}\nStatus: 200 OK\nTytuł strony: {page_title}\nNagłówki <b> na stronie: {main_headers}\n\n--- SUROWY KOD (POCZĄTEK) ---\n{html_text[:1500]}"
+                    
+                    # Pancerne podejście: Przeszukujemy WSZYSTKIE wiersze (tr) na stronie, bez względu na klasę tabeli
                     wiersze = soup.find_all("tr")
                     current_league = "Rozgrywki"
                     
                     for row in wiersze:
-                        # Sprawdzamy czy wiersz definiuje ligę
-                        league_cell = row.find(["th", "td"], {"class": "vader"}) or row.find("b")
-                        if league_cell and not row.find("a"):
-                            text_l = league_cell.get_text(strip=True)
-                            if text_l and not text_l.isdigit() and ":" not in text_l and "Wybierz" not in text_l:
+                        # Sprawdzamy czy wiersz jest nagłówkiem ligi (brak linków, pogrubienie lub tło vader)
+                        vader_cell = row.find(["th", "td"], {"class": "vader"}) or row.find("b")
+                        if vader_cell and not row.find("a"):
+                            text_l = vader_cell.get_text(strip=True)
+                            if text_l and not text_l.isdigit() and ":" not in text_l and len(text_l) > 3 and "Wybierz" not in text_l:
                                 current_league = text_l
                                 continue
                         
-                        # Sprawdzamy czy to wiersz z meczem
+                        # Wyciągamy komórki (td) wiersza
                         cols = row.find_all("td")
                         if len(cols) >= 2:
                             time_text = cols[0].get_text(strip=True)
                             
-                            # Czy pierwsza kolumna to format godziny HH:MM
-                            if ":" in time_text and len(time_text) <= 5 and time_text[0].isdigit():
+                            # Płaska walidacja: czy tekst w pierwszej kolumnie wygląda jak godzina meczu?
+                            if regex_godzina.match(time_text):
                                 teams_text = cols[1].get_text(strip=True)
                                 score_text = cols[2].get_text(strip=True) if len(cols) > 2 else ""
                                 
-                                if teams_text and "wypisz_zapowiedzi" not in teams_text:
+                                # Odrzucamy wiersze nawigacyjne serwera
+                                if teams_text and "wypisz_zapowiedzi" not in teams_text and "poprzednie" not in teams_text:
                                     all_matches.append({
                                         "Data_Sort": celowana_data.date(),
                                         "Dzień": formatowana_data_pl,
@@ -154,10 +159,10 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
                                         "Wynik": score_text
                                     })
                 
-                time.sleep(0.1) # Naturalna mikropauza
+                time.sleep(0.05)
                 
             except Exception as e:
-                ostatnia_surowa_odpowiedz = f"Wyjątek połączenia: {str(e)}"
+                ostatnia_surowa_odpowiedz = f"Błąd w pętli dla URL {full_url}: {str(e)}"
 
     progress_bar.empty()
     status_text.empty()
@@ -169,17 +174,17 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
         
     return df, ostatnia_surowa_odpowiedz
 
-# 3. Prezentacja danych w UI
+# 3. Logika prezentacji danych w interfejsie
 if not wybrane_id:
     st.info("👈 Wybierz przynajmniej jeden okręg na panelu bocznym i kliknij 'Znajdź mecze'.")
 else:
     if "pobrane_dane" not in st.session_state:
         st.session_state.pobrane_dane = None
     if "debug_html" not in st.session_state:
-        st.session_state.debug_html = "Brak danych diagnostycznych."
+        st.session_state.debug_html = "Brak wygenerowanego raportu diagnostycznego."
 
-    if shortcuts := uruchom_szukanie:
-        with st.spinner("Pobieranie terminarza przy użyciu pancernej sesji RODO..."):
+    if uruchom_szukanie:
+        with st.spinner("Przeszukiwanie bazy meczowej 90minut.pl..."):
             df, debug = pobierz_mecze_precyzyjnie(wybrane_id, LICZBA_DNI_W_PRZOD)
             st.session_state.pobrane_dane = df
             st.session_state.debug_html = debug
@@ -188,9 +193,11 @@ else:
         df_mecze = st.session_state.pobrane_dane
 
         if df_mecze.empty:
-            st.error("❌ Parser nie odnalazł meczów w kodzie strony pomimo połączenia z serwerem.")
-            with st.expander("🛠️ Kod źródłowy zwrócony przez serwer (Zweryfikuj teraz)", expanded=True):
-                st.code(st.session_state.debug_html[:4000])
+            st.error("❌ Komunikat: Serwer zwrócił poprawną stronę (HTTP 200), lecz nie odnaleziono na niej meczów tekstowych.")
+            
+            # NOWY, SZCZEGÓŁOWY RAPORT DIAGNOSTYCZNY
+            with st.expander("🛠️ Zobacz co dokładnie widzi skrypt na stronie (Analiza nagłówków)", expanded=True):
+                st.code(st.session_state.debug_html)
         else:
             search_query = st.text_input("🔍 Szybki filtr tabeli (wpisz klub lub ligę):", "")
             df_filtrowane = df_mecze.copy()
@@ -209,7 +216,7 @@ else:
                 
                 with st.expander(naglowek_sekcji, expanded=False):
                     if df_okregu.empty:
-                        st.info("Brak meczów spełniających kryteria wyszukiwania.")
+                        st.info("Brak meczów spełniających kryteria wyszukiwania dla tego regionu.")
                     else:
                         df_wyswietl = df_okregu.drop(columns=["Okręg / Związek", "Data_Sort", "Sort_Time"], errors='ignore')
                         st.dataframe(
