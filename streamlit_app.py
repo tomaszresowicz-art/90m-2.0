@@ -4,6 +4,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 import re
 import json
+import urllib.parse
+import base64
 
 # 1. Słownik mapujący ID okręgów na czytelne nazwy
 OKREGI = {
@@ -157,9 +159,9 @@ if uruchom and not dane_z_url:
             
             loader.innerHTML = "✅ Zakończono! Przeładowanie tabeli...";
             
-            // NOWY MOST KOMUNIKACYJNY: Wstrzykujemy dane jako parametr URL i odświeżamy okno nadrzędne Streamlit
+            // Kodujemy paczkę HTML do formatu Base64, żeby bezpiecznie podać ją w pasku URL przeglądarki
             const jsonStr = JSON.stringify(results);
-            const b64Data = btoa(unescape(encodeURIComponent(jsonStr))); // Bezpieczne kodowanie Base64 dla długich ciągów HTML
+            const b64Data = btoa(unescape(encodeURIComponent(jsonStr)));
             
             const currentUrl = new URL(window.parent.location.href);
             currentUrl.searchParams.set("paczka_wynikowa", b64Data);
@@ -173,14 +175,13 @@ if uruchom and not dane_z_url:
     """
     
     st.info("Trwa pobieranie terminarzy przez Twoją przeglądarkę...")
-    # Wykorzystujemy nowoczesne st.iframe zalecane przez konsolę
-    st.iframe(src="data:text/html;charset=utf-8," + requests.utils.quote(html_content), height=65)
+    # POPRAWIONE: Używamy standardowego urllib.parse.quote zamiast requests.utils.quote
+    st.iframe(src="data:text/html;charset=utf-8," + urllib.parse.quote(html_content), height=65)
 
 # --- ETAP PRZETWARZANIA W PYTHONIE ---
 if dane_z_url:
     try:
-        # Dekodujemy dane Base64 przekazane w adresie URL przeglądarki
-        import base64
+        # Dekodujemy paczkę Base64 z adresu URL z powrotem do tekstu
         decoded_bytes = base64.b64decode(dane_z_url)
         decoded_str = decoded_bytes.decode('utf-8')
         pobrane_strony = json.loads(decoded_str)
@@ -194,32 +195,4 @@ if dane_z_url:
                 mecze_z_dnia = parsuj_html_90minut(html_content, item["okreg"], item["data_pl"], celowana_data_obj)
                 all_parsed_matches.extend(mecze_z_dnia)
                 
-        df_mecze = pd.DataFrame(all_parsed_matches)
-        
-        if df_mecze.empty:
-            st.warning("⚠️ Połączenie powiodło się, ale w wybranym przedziale czasowym brak zaplanowanych meczów w bazie danych.")
-        else:
-            st.success(f"🎉 Sukces! Sparsowano {len(df_mecze)} meczów z Twojego organicznego adresu IP!")
-            
-            search_query = st.text_input("🔍 Filtruj wyniki (klub / liga):", "")
-            df_filtrowane = df_mecze.copy()
-            
-            if search_query:
-                df_filtrowane = df_filtrowane[df_filtrowane.astype(str).apply(lambda x: x.str.contains(search_query, case=False)).any(axis=1)]
-
-            st.write("---")
-            
-            for id_okreg in wybrane_id:
-                nazwa_okregu = OKREGI[id_okreg]
-                df_okregu = df_filtrowane[df_filtrowane["Okręg / Związek"] == nazwa_okregu]
-                liczba_meczów = len(df_okregu)
-                
-                with st.expander(f"📍 {nazwa_okregu} ({liczba_meczów} meczów)", expanded=True if liczba_meczów > 0 else False):
-                    if df_okregu.empty:
-                        st.info("Brak spotkań.")
-                    else:
-                        df_wyswietl = df_okregu.drop(columns=["Okręg / Związek", "Data_Sort"], errors='ignore')
-                        st.dataframe(df_wyswietl, use_container_width=True, hide_index=True)
-                        
-    except Exception as e:
-        st.error
+        df_mecze = pd.
