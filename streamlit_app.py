@@ -78,7 +78,6 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
     }
     session.cookies.update(cookies)
     
-    base_url = "http://www.90minut.pl/mecze_okreg.php"
     dzis = datetime.now()
     total_steps = len(identyfikatory_okregow) * (liczba_dni + 1)
     
@@ -104,10 +103,129 @@ def pobierz_mecze_precyzyjnie(identyfikatory_okregow, liczba_dni):
             progress_bar.progress(procent)
             status_text.text(f"Pobieranie: {nazwa_okregu} ➡️ {data_str}")
 
-            # FIX: Przekazujemy parametry jako słownik. Requests sam zakoduje znak '&' w adresie.
-            payload = {
-                "id_okreg": str(id_okreg),
-                "data": data_str
-            }
+            # Gwarantujemy sztywną kolejność parametrów (id_okreg przed data) bez automatycznego sortowania requests
+            full_url = f"http://www.90minut.pl/mecze_okreg.php?id_okreg={id_okreg}&data={data_str}"
 
-            dzien_tygodnia =
+            # POPRAWKA SYNTAXU: Pełne i poprawne przypisanie zmiennych kalendarzowych
+            dni_tygodnia_pl = ["poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota", "niedziela"]
+            dzien_tygodnia = dni_tygodnia_pl[celowana_data.weekday()]
+            
+            miesiace_pl = ["", "stycznia", "lutego", "marca", "kwietnia", "maja", "czerwca", "lipca", "sierpnia", "września", "października", "listopada", "grudnia"]
+            formatowana_data_pl = f"{celowana_data.day} {miesiace_pl[celowana_data.month]} {celowana_data.year} ({dzien_tygodnia})"
+
+            try:
+                # Strzelamy bezpośrednio w URL o sztywnej strukturze
+                response = session.get(full_url, headers=headers, timeout=12)
+                
+                if response.status_code == 200:
+                    response.encoding = 'iso-8859-2'
+                    html_text = response.text
+                    
+                    soup = BeautifulSoup(html_text, "html.parser")
+                    
+                    page_title = soup.title.string if soup.title else "Brak <title>"
+                    main_headers = [b.get_text(strip=True) for b in soup.find_all("b")[:6]]
+                    ostatnia_surowa_odpowiedz = f"Wysłany URL: {response.url}\nStatus: 200 OK\nTytuł strony: {page_title}\nNagłówki <b>: {main_headers}\n\n--- SUROWY KOD ---\n{html_text[:1200]}"
+                    
+                    wiersze = soup.find_all("tr")
+                    current_league = "Rozgrywki"
+                    
+                    for row in wiersze:
+                        vader_cell = row.find(["th", "td"], {"class": "vader"}) or row.find("b")
+                        if vader_cell and not row.find("a"):
+                            text_l = vader_cell.get_text(strip=True)
+                            if text_l and not text_l.isdigit() and ":" not in text_l and len(text_l) > 3 and "Wybierz" not in text_l:
+                                current_league = text_l
+                                continue
+                        
+                        cols = row.find_all("td")
+                        if len(cols) >= 2:
+                            time_text = cols[0].get_text(strip=True)
+                            
+                            if regex_godzina.match(time_text):
+                                teams_text = cols[1].get_text(strip=True)
+                                score_text = cols[2].get_text(strip=True) if len(cols) > 2 else ""
+                                
+                                if teams_text and "wypisz_zapowiedzi" not in teams_text and "poprzednie" not in teams_text:
+                                    all_matches.append({
+                                        "Data_Sort": celowana_data.date(),
+                                        "Dzień": formatowana_data_pl,
+                                        "Okręg / Związek": nazwa_okregu,
+                                        "Rozgrywki / Liga": current_league,
+                                        "Godzina": time_text,
+                                        "Mecz": teams_text,
+                                        "Wynik": score_text
+                                    })
+                
+                time.sleep(0.05)
+                
+            except Exception as e:
+                ostatnia_surowa_odpowiedz = f"Błąd w pętli dla URL {full_url}: {str(e)}"
+
+    progress_bar.empty()
+    status_text.empty()
+
+    df = pd.DataFrame(all_matches)
+    if not df.empty:
+        df['Sort_Time'] = pd.to_datetime(df['Godzina'], format='%H:%M', errors='coerce').dt.time
+        df = df.sort_values(by=["Data_Sort", "Sort_Time", "Rozgrywki / Liga"])
+        
+    return df, ostatnia_surowa_odpowiedz
+
+# 3. Wyświetlanie wyników w UI
+if not wybrane_id:
+    st.info("👈 Wybierz okręgi w panelu bocznym i kliknij 'Znajdź mecze'.")
+else:
+    if "pobrane_dane" not in st.session_state:
+        st.session_state.pobrane_dane = None
+    if "debug_html" not in st.session_state:
+        st.session_state.debug_html = "Brak danych."
+
+    if uruchom_szukanie:
+        with st.spinner("Pobieranie terminarza..."):
+            df, debug = pobierz_mecze_precyzyjnie(wybrane_id, LICZBA_DNI_W_PRZOD)
+            st.session_state.pobrane_dane = df
+            st.session_state.debug_html = debug
+
+    if st.session_state.pobrane_dane is not None:
+        df_mecze = st.session_state.pobrane_dane
+
+        if df_mecze.empty:
+            st.error("❌ Parser nie odnalazł meczów.")
+            with st.expander("🛠️ Analiza wysłanego żądania (Zweryfikuj nagłówki)", expanded=True):
+                st.code(st.session_state.debug_html)
+        else:
+            search_query = st.text_input("🔍 Szybki filtr tabeli (wpisz klub lub ligę):", "")
+            df_filtrowane = df_mecze.copy()
+            
+            if search_query:
+                df_filtrowane = df_filtrowane[df_filtrowane.astype(str).apply(lambda x: x.str.contains(search_query, case=False)).any(axis=1)]
+
+            st.write("---")
+            
+            for id_okreg in wybrane_id:
+                nazwa_okregu = OKREGI[id_okreg]
+                df_okregu = df_filtrowane[df_filtrowane["Okręg / Związek"] == nazwa_okregu]
+                
+                liczba_meczów = len(df_okregu)
+                naglowek_sekcji = f"📍 {nazwa_okregu} (Zaplanowanych meczów: {liczba_meczów})"
+                
+                with st.expander(naglowek_sekcji, expanded=False):
+                    if df_okregu.empty:
+                        st.info("Brak meczów spełniających kryteria dla tego regionu.")
+                    else:
+                        df_wyswietl = df_okregu.drop(columns=["Okręg / Związek", "Data_Sort", "Sort_Time"], errors='ignore')
+                        st.dataframe(
+                            df_wyswietl,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Dzień": st.column_config.TextColumn("📅 Data i dzień", width="medium"),
+                                "Rozgrywki / Liga": st.column_config.TextColumn("🏆 Rozgrywki", width="medium"),
+                                "Godzina": st.column_config.TextColumn("⏰ Godzina", width="small"),
+                                "Mecz": st.column_config.TextColumn("⚔️ Spotkanie", width="large"),
+                                "Wynik": st.column_config.TextColumn("📊 Wynik", width="small"),
+                            }
+                        )
+    else:
+        st.info("👈 Skonfiguruj filtry po lewej stronie i kliknij '🔍 Znajdź mecze'.")
