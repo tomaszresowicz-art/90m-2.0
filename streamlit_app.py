@@ -194,3 +194,32 @@ if dane_z_url:
         if len(all_parsed_matches) == 0:
             st.warning("⚠️ Połączenie powiodło się, ale w wybranym przedziale czasowym brak zaplanowanych meczów w bazie danych.")
         else:
+            df_mecze = pd.DataFrame(all_parsed_matches)
+            st.success(f"🎉 Sukces! Sparsowano {len(df_mecze)} meczów z Twojego organicznego adresu IP!")
+            
+            search_query = st.text_input("🔍 Filtruj wyniki (klub / liga):", "")
+            df_filtrowane = df_mecze.copy()
+            
+            if search_query:
+                df_filtrowane = df_filtrowane[df_filtrowane.astype(str).apply(lambda x: x.str.contains(search_query, case=False)).any(axis=1)]
+
+            st.write("---")
+            
+            for id_okreg in wybrane_id:
+                nazwa_okregu = OKREGI[id_okreg]
+                df_okregu = df_filtrowane[df_filtrowane["Okręg / Związek"] == nazwa_okregu]
+                liczba_meczów = len(df_okregu)
+                
+                with st.expander(f"📍 {nazwa_okregu} ({liczba_meczów} meczów)", expanded=True if liczba_meczów > 0 else False):
+                    if df_okregu.empty:
+                        st.info("Brak spotkań.")
+                    else:
+                        df_wyswietl = df_okregu.drop(columns=["Okręg / Związek", "Data_Sort"], errors='ignore')
+                        st.dataframe(df_wyswietl, use_container_width=True, hide_index=True)
+                        
+    except Exception as e:
+        st.error(f"Nie udało się przetworzyć danych zwrotnych: {str(e)}")
+        st.info("Jeśli błąd się powtarza, kliknij 'Resetuj aplikację' w panelu bocznym.")
+else:
+    if not uruchom:
+        st.info("👈 Skonfiguruj filtry w panelu bocznym i kliknij '🚀 Uruchom pobieranie'.")
