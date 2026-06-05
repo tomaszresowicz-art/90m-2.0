@@ -31,7 +31,7 @@ OKREGI = {
 st.set_page_config(page_title="Niewykrywalny Terminarz 90minut", layout="wide", page_icon="⚽")
 
 st.title("⚽ Niewykrywalny Terminarz 90minut.pl")
-st.caption("Aplikacja dostosowana do najnowszych standardów Streamlit (st.iframe + st.query_params).")
+st.caption("Aplikacja dostosowana do standardów Streamlit (st.iframe + st.query_params).")
 
 # Panel boczny (Sidebar)
 with st.sidebar:
@@ -118,13 +118,12 @@ for id_okreg in wybrane_id:
             "raw_date": d_str
         })
 
-# Sprawdzamy czy w URL są już zapisane dane z powrotu z JavaScriptu
+# Odczyt danych zapisanych w pasku adresu URL
 dane_z_url = st.query_params.get("paczka_wynikowa", "")
 
 if uruchom and not dane_z_url:
     js_urls = json.dumps(list_of_urls)
     
-    # Budujemy czysty dokument HTML zawierający skrypt wykonawczy
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -159,7 +158,6 @@ if uruchom and not dane_z_url:
             
             loader.innerHTML = "✅ Zakończono! Przeładowanie tabeli...";
             
-            // Kodujemy paczkę HTML do formatu Base64, żeby bezpiecznie podać ją w pasku URL przeglądarki
             const jsonStr = JSON.stringify(results);
             const b64Data = btoa(unescape(encodeURIComponent(jsonStr)));
             
@@ -175,13 +173,11 @@ if uruchom and not dane_z_url:
     """
     
     st.info("Trwa pobieranie terminarzy przez Twoją przeglądarkę...")
-    # POPRAWIONE: Używamy standardowego urllib.parse.quote zamiast requests.utils.quote
     st.iframe(src="data:text/html;charset=utf-8," + urllib.parse.quote(html_content), height=65)
 
 # --- ETAP PRZETWARZANIA W PYTHONIE ---
 if dane_z_url:
     try:
-        # Dekodujemy paczkę Base64 z adresu URL z powrotem do tekstu
         decoded_bytes = base64.b64decode(dane_z_url)
         decoded_str = decoded_bytes.decode('utf-8')
         pobrane_strony = json.loads(decoded_str)
@@ -195,4 +191,6 @@ if dane_z_url:
                 mecze_z_dnia = parsuj_html_90minut(html_content, item["okreg"], item["data_pl"], celowana_data_obj)
                 all_parsed_matches.extend(mecze_z_dnia)
                 
-        df_mecze = pd.
+        if len(all_parsed_matches) == 0:
+            st.warning("⚠️ Połączenie powiodło się, ale w wybranym przedziale czasowym brak zaplanowanych meczów w bazie danych.")
+        else:
