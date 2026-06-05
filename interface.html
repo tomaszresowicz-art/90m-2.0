@@ -2,76 +2,36 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Terminarz Piłkarski</title>
+    <title>Terminarz</title>
     <style>
-        body { font-family: sans-serif; padding: 20px; background-color: #f4f4f4; }
-        h1 { text-align: center; }
-        .btn-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-bottom: 20px; }
-        button { padding: 10px 15px; cursor: pointer; border: none; background: #007bff; color: white; border-radius: 5px; }
-        button:hover { background: #0056b3; }
-        
-        #wyniki { max-width: 600px; margin: 0 auto; }
-        .mecz-item { 
-            background: white; padding: 12px; margin-bottom: 8px; 
-            border: 1px solid #ddd; border-radius: 8px; transition: 0.3s;
-        }
-        
-        /* Styl dla wyróżnionych drużyn */
-        .highlight-match {
-            border: 3px solid #ffcc00 !important; 
-            background-color: #fffdf0;
-            font-weight: bold;
-        }
+        body { font-family: sans-serif; padding: 10px; }
+        .mecz { border: 1px solid #ccc; padding: 5px; margin: 5px 0; border-radius: 4px; }
+        /* Styl tylko dla wyróżnionych drużyn */
+        .highlight { border: 2px solid black !important; font-weight: bold; background-color: #f9f9f9; }
     </style>
 </head>
 <body>
 
-    <h1>Terminarz Okręgowy</h1>
-    <div class="btn-container">
-        <button onclick="pobierz(5)">Małopolski ZPN</button>
-        <button onclick="pobierz(1)">Inny Okręg</button>
-    </div>
-
-    <div id="wyniki">Kliknij okręg, aby pobrać mecze...</div>
+    <button onclick="pobierz(5)">Małopolski ZPN</button>
+    <div id="wyniki"></div>
 
     <script>
         async function pobierz(id) {
+            document.getElementById("wyniki").innerHTML = "Cierpliwości...";
+            const res = await fetch('/pobierz?id=' + id);
+            const dane = await res.json();
             const kontener = document.getElementById("wyniki");
-            kontener.innerHTML = "Cierpliwości...";
+            kontener.innerHTML = "";
 
-            try {
-                const res = await fetch('/pobierz?id=' + id);
-                const dane = await res.json();
+            dane.forEach(mecz => {
+                const druzyny = ["Wisła Kraków", "Garbarnia Kraków", "Puszcza Niepołomice"];
+                const jestWyr = druzyny.some(d => mecz.mecz.includes(d));
                 
-                kontener.innerHTML = "";
-                
-                if (dane.length === 0) {
-                    kontener.innerHTML = "Brak meczów.";
-                    return;
-                }
-
-                dane.forEach(mecz => {
-                    const nazwaMeczu = mecz.mecz;
-                    const druzyny = ["Wisła Kraków", "Garbarnia Kraków", "Puszcza Niepołomice"];
-                    
-                    let klasaCSS = "";
-                    let ikona = "";
-
-                    // Sprawdzenie czy drużyna jest na liście
-                    if (druzyny.some(d => nazwaMeczu.includes(d))) {
-                        klasaCSS = "highlight-match";
-                        ikona = "⚽ ";
-                    }
-
-                    const div = document.createElement("div");
-                    div.className = "mecz-item " + klasaCSS;
-                    div.innerHTML = `<strong>${mecz.data_label} ${mecz.godzina}</strong><br>${ikona}${nazwaMeczu}`;
-                    kontener.appendChild(div);
-                });
-            } catch (e) {
-                kontener.innerHTML = "Wystąpił błąd podczas pobierania danych.";
-            }
+                const div = document.createElement("div");
+                div.className = "mecz" + (jestWyr ? " highlight" : "");
+                div.innerHTML = (jestWyr ? "⚽ " : "") + mecz.data_label + " " + mecz.godzina + " - " + mecz.mecz;
+                kontener.appendChild(div);
+            });
         }
     </script>
 </body>
