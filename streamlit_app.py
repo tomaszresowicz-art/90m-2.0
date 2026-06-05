@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 import re
 import json
 import urllib.parse
-import base64
 
 # 1. Słownik mapujący ID okręgów na czytelne nazwy
 OKREGI = {
@@ -28,14 +27,14 @@ OKREGI = {
     16: "Łódzki ZPN"
 }
 
-st.set_page_config(page_title="Niewykrywalny Terminarz 90minut", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Półautomatyczny Terminarz 90minut", layout="wide", page_icon="⚽")
 
-st.title("⚽ Niewykrywalny Terminarz 90minut.pl")
-st.caption("Aplikacja dostosowana do standardów Streamlit (st.iframe + st.query_params).")
+st.title("⚽ Niezawodny Terminarz 90minut.pl")
+st.caption("Metoda hybrydowa: bezpieczne pobieranie przeglądarkowe + wczytanie pliku.")
 
 # Panel boczny (Sidebar)
 with st.sidebar:
-    st.header("⚙️ Ustawienia")
+    st.header("⚙️ Krok 1: Ustawienia pobierania")
     wybrane_nazwy = st.multiselect(
         "Wybierz okręgi/związki:",
         options=list(OKREGI.values()),
@@ -44,10 +43,8 @@ with st.sidebar:
     LICZBA_DNI_W_PRZOD = st.slider("Zakres wyszukiwania (w dniach):", min_value=1, max_value=7, value=3)
     
     st.write("---")
-    uruchom = st.button("🚀 Uruchom pobieranie", type="primary", use_container_width=True)
-    
-    if st.button("🔄 Resetuj aplikację / Wyczyść dane", use_container_width=True):
-        st.query_params.clear()
+    st.header("⚙️ Krok 3: Czyszczenie")
+    if st.button("🔄 Resetuj aplikację", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
@@ -85,7 +82,7 @@ def parsuj_html_90minut(html_text, nazwa_okregu, formatowana_data_pl, celowana_d
                 
                 if teams_text and "wypisz_zapowiedzi" not in teams_text and "poprzednie" not in teams_text:
                     matches.append({
-                        "Data_Sort": celowana_data.date(),
+                        "Data_Sort": celowana_data.date().isoformat(),
                         "Dzień": formatowana_data_pl,
                         "Okręg / Związek": nazwa_okregu,
                         "Rozgrywki / Liga": current_league,
@@ -118,70 +115,78 @@ for id_okreg in wybrane_id:
             "raw_date": d_str
         })
 
-# Odczyt danych zapisanych w pasku adresu URL
-dane_z_url = st.query_params.get("paczka_wynikowa", "")
+# --- INTERFEJS KROK PO KROKU ---
+col1, col2 = st.columns(2)
 
-if uruchom and not dane_z_url:
-    js_urls = json.dumps(list_of_urls)
+with col1:
+    st.subheader("📥 Krok 1: Pobierz dane z 90minut")
+    st.write("Kliknij poniższy przycisk. Otworzy się małe okienko, które pobierze mecze przez Twoje IP i zapisze plik `mecze_dane.json` w Twoim folderze Pobrane.")
     
-    html_content = f"""
+    js_urls = json.dumps(list_of_urls)
+    html_downloader = f"""
     <!DOCTYPE html>
     <html>
     <head><meta charset="utf-8"></head>
-    <body style="margin:0; padding:0; font-family: sans-serif; background: #e1f5fe;">
-        <div id="loader-info" style="font-size: 13px; color: #1f77b4; padding: 10px; border-left: 4px solid #03a9f4;">
-            🤖 Uruchamianie bezpiecznego tunelu...
-        </div>
+    <body>
+        <button id="btn" style="width:100%; height:45px; background-color:#ff4b4b; color:white; border:none; border-radius:8px; font-weight:bold; font-size:15px; cursor:pointer;">
+            🚀 Uruchom pobieranie pliku z meczami
+        </button>
+        <div id="status" style="margin-top:10px; font-family:sans-serif; font-size:13px; color:#555;"></div>
 
         <script>
-        const urls = {js_urls};
-        const results = {{}};
-        
-        async function run() {{
-            const loader = document.getElementById("loader-info");
+        document.getElementById('btn').addEventListener('click', async () => {{
+            const urls = {js_urls};
+            const results = {{}};
+            const statusDiv = document.getElementById('status');
+            
+            document.getElementById('btn').disabled = true;
+            document.getElementById('btn').style.backgroundColor = '#ccc';
             
             for(let i=0; i<urls.length; i++) {{
                 const item = urls[i];
-                loader.innerHTML = `⏳ Pobieranie z Twojego IP: <b>${{item.okreg}}</b> (${{item.data_pl}})...`;
+                statusDiv.innerHTML = `⏳ Pobieranie: ${{item.okreg}} (${{item.data_pl}})...`;
                 
                 try {{
                     const response = await fetch('https://corsproxy.io/?' + encodeURIComponent(item.url));
                     if(response.ok) {{
-                        const text = await response.text();
-                        results[item.key] = text;
+                        results[item.key] = await response.text();
                     }}
                 }} catch(e) {{
-                    console.error("Błąd pobierania:", e);
+                    console.error(e);
                 }}
-                await new Promise(r => setTimeout(r, 200));
+                await new Promise(r => setTimeout(r, 150));
             }}
             
-            loader.innerHTML = "✅ Zakończono! Przeładowanie tabeli...";
+            statusDiv.innerHTML = "✅ Gotowe! Generowanie pliku...";
             
-            const jsonStr = JSON.stringify(results);
-            const b64Data = btoa(unescape(encodeURIComponent(jsonStr)));
+            // Tworzenie i automatyczne pobieranie pliku JSON na komputer użytkownika
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(results));
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.setAttribute("href", dataStr);
+            downloadAnchor.setAttribute("download", "mecze_dane.json");
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
             
-            const currentUrl = new URL(window.parent.location.href);
-            currentUrl.searchParams.set("paczka_wynikowa", b64Data);
-            window.parent.location.href = currentUrl.toString();
-        }}
-        
-        setTimeout(run, 300);
+            statusDiv.innerHTML = "🎉 Plik 'mecze_dane.json' został pobrany! Przejdź do Kroku 2.";
+            document.getElementById('btn').disabled = false;
+            document.getElementById('btn').style.backgroundColor = '#ff4b4b';
+        }});
         </script>
     </body>
     </html>
     """
-    
-    st.info("Trwa pobieranie terminarzy przez Twoją przeglądarkę...")
-    st.iframe(src="data:text/html;charset=utf-8," + urllib.parse.quote(html_content), height=65)
+    st.iframe(src="data:text/html;charset=utf-8," + urllib.parse.quote(html_downloader), height=110)
+
+with col2:
+    st.subheader("📤 Krok 2: Wgraj pobrany plik")
+    st.write("Przeciągnij pobrany plik `mecze_dane.json` tutaj, aby Python wygenerował terminarz:")
+    wgrany_plik = st.file_uploader("Wybierz plik JSON", type=["json"], label_visibility="collapsed")
 
 # --- ETAP PRZETWARZANIA W PYTHONIE ---
-if dane_z_url:
+if wgrany_plik is not None:
     try:
-        decoded_bytes = base64.b64decode(dane_z_url)
-        decoded_str = decoded_bytes.decode('utf-8')
-        pobrane_strony = json.loads(decoded_str)
-        
+        pobrane_strony = json.load(wgrany_plik)
         all_parsed_matches = []
         
         for item in list_of_urls:
@@ -192,12 +197,12 @@ if dane_z_url:
                 all_parsed_matches.extend(mecze_z_dnia)
                 
         if len(all_parsed_matches) == 0:
-            st.warning("⚠️ Połączenie powiodło się, ale w wybranym przedziale czasowym brak zaplanowanych meczów w bazie danych.")
+            st.warning("⚠️ W załadowanym pliku nie odnaleziono żadnych zaplanowanych meczów dla wybranych kryteriów.")
         else:
             df_mecze = pd.DataFrame(all_parsed_matches)
-            st.success(f"🎉 Sukces! Sparsowano {len(df_mecze)} meczów z Twojego organicznego adresu IP!")
+            st.success(f"🎉 Sukces! Pomyślnie załadowano i sparsowano {len(df_mecze)} meczów!")
             
-            search_query = st.text_input("🔍 Filtruj wyniki (klub / liga):", "")
+            search_query = st.text_input("🔍 Szybki filtr tabeli (wpisz klub lub ligę):", "")
             df_filtrowane = df_mecze.copy()
             
             if search_query:
@@ -212,14 +217,12 @@ if dane_z_url:
                 
                 with st.expander(f"📍 {nazwa_okregu} ({liczba_meczów} meczów)", expanded=True if liczba_meczów > 0 else False):
                     if df_okregu.empty:
-                        st.info("Brak spotkań.")
+                        st.info("Brak spotkań spełniających kryteria.")
                     else:
                         df_wyswietl = df_okregu.drop(columns=["Okręg / Związek", "Data_Sort"], errors='ignore')
                         st.dataframe(df_wyswietl, use_container_width=True, hide_index=True)
                         
     except Exception as e:
-        st.error(f"Nie udało się przetworzyć danych zwrotnych: {str(e)}")
-        st.info("Jeśli błąd się powtarza, kliknij 'Resetuj aplikację' w panelu bocznym.")
+        st.error(f"Błąd struktury pliku: {str(e)}")
 else:
-    if not uruchom:
-        st.info("👈 Skonfiguruj filtry w panelu bocznym i kliknij '🚀 Uruchom pobieranie'.")
+    st.info("💡 Instrukcja: Wybierz ligi, kliknij czerwony przycisk w Kroku 1, a otrzymany plik upuść w Kroku 2.")
