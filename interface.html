@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>Terminarz 90minut</title>
+    <style>
+        body { display: flex; font-family: sans-serif; margin: 0; }
+        #menu { width: 280px; background: #f4f4f4; padding: 15px; height: 100vh; overflow-y: auto; border-right: 1px solid #ccc; }
+        #content { flex-grow: 1; padding: 20px; }
+        button { width: 100%; padding: 10px; margin: 4px 0; cursor: pointer; text-align: left; background: white; border: 1px solid #ddd; border-radius: 4px; }
+        button:hover { background: #e9e9e9; }
+        .data-header { background: #2c3e50; color: white; padding: 8px 15px; margin-top: 20px; font-weight: bold; border-radius: 4px; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 2px; }
+        td { border: 1px solid #ddd; padding: 8px; }
+        td:first-child { width: 70px; font-weight: bold; color: #333; }
+    </style>
+</head>
+<body>
+
+    <div id="menu">
+        <h3>Wybierz ZPN</h3>
+        <div id="lista-przyciskow"></div>
+    </div>
+
+    <div id="content">
+        <h2 id="status">Wybierz okręg z menu po lewej</h2>
+        <div id="lista-meczow"></div>
+    </div>
+
+    <script>
+        const okregi = [
+            // Twoje 4 wybrane:
+            {id: 5, nazwa: "Małopolski ZPN"},
+            {id: 11, nazwa: "Śląski ZPN"},
+            {id: 8, nazwa: "Podkarpacki ZPN"},
+            {id: 12, nazwa: "Świętokrzyski ZPN"},
+            // Reszta alfabetycznie:
+            {id: 16, nazwa: "Dolnośląski ZPN"},
+            {id: 0, nazwa: "Szczebel centralny"},
+            {id: 1, nazwa: "Kujawsko-Pomorski ZPN"},
+            {id: 2, nazwa: "Lubelski ZPN"},
+            {id: 3, nazwa: "Lubuski ZPN"},
+            {id: 4, nazwa: "Łódzki ZPN"},
+            {id: 6, nazwa: "Mazowiecki ZPN"},
+            {id: 7, nazwa: "Opolski ZPN"},
+            {id: 9, nazwa: "Podlaski ZPN"},
+            {id: 10, nazwa: "Pomorski ZPN"},
+            {id: 13, nazwa: "Warmińsko-Mazurski ZPN"},
+            {id: 14, nazwa: "Wielkopolski ZPN"},
+            {id: 15, nazwa: "Zachodniopomorski ZPN"}
+        ];
+
+        // Generowanie przycisków w menu
+        const container = document.getElementById('lista-przyciskow');
+        okregi.forEach(o => {
+            container.innerHTML += `<button onclick="pobierz(${o.id}, '${o.nazwa}')">${o.nazwa}</button>`;
+        });
+
+        async function pobierz(id, nazwa) {
+            document.getElementById('status').innerText = "Ładowanie meczów dla: " + nazwa;
+            document.getElementById('lista-meczow').innerHTML = 'Cierpliwości...';
+            
+            const res = await fetch('/pobierz?id=' + id);
+            const dane = await res.json();
+            
+            let html = '', biezacaData = '';
+            
+            dane.forEach(m => {
+                if(m.data_label !== biezacaData) {
+                    html += `<div class="data-header">${m.data_label}</div>`;
+                    biezacaData = m.data_label;
+                }
+                html += `<table><tr><td>${m.godzina}</td><td>${m.mecz}</td></tr></table>`;
+            });
+            
+            document.getElementById('status').innerText = "Terminarz: " + nazwa;
+            document.getElementById('lista-meczow').innerHTML = html || "Brak meczów w wybranym terminie.";
+        }
+    </script>
+</body>
+</html>
